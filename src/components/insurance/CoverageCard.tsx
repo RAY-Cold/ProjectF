@@ -1,16 +1,20 @@
 'use client';
 
 import { CoveragePolicy } from '@/lib/types/insurance';
-import { formatETH, formatPercentage, formatTimestamp } from '@/lib/utils/formatters';
-import { Shield, Calendar, AlertCircle } from 'lucide-react';
+import { formatETH, formatPercentage } from '@/lib/utils/formatters';
+import { Shield, Calendar, FileText } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 interface CoverageCardProps {
   policy: CoveragePolicy;
+  onSubmitClaim?: (policy: CoveragePolicy) => void; // ✅ new
 }
 
-export function CoverageCard({ policy }: CoverageCardProps) {
-  const daysRemaining = Math.max(0, Math.floor((policy.endDate - Date.now() / 1000) / 86400));
+export function CoverageCard({ policy, onSubmitClaim }: CoverageCardProps) {
+  const daysRemaining = Math.max(
+    0,
+    Math.floor((policy.endDate - Date.now() / 1000) / 86400)
+  );
 
   return (
     <motion.div
@@ -66,12 +70,19 @@ export function CoverageCard({ policy }: CoverageCardProps) {
           </span>
         </div>
         {policy.nftTokenId && (
-          <span className="text-xs text-muted-foreground">
-            NFT: {policy.nftTokenId}
-          </span>
+          <span className="text-xs text-muted-foreground">NFT: {policy.nftTokenId}</span>
         )}
       </div>
+
+      {policy.active && onSubmitClaim && (
+        <button
+          onClick={() => onSubmitClaim(policy)}
+          className="mt-4 w-full px-4 py-2 rounded-lg border border-border hover:bg-muted transition-colors font-medium flex items-center justify-center gap-2"
+        >
+          <FileText className="w-4 h-4" />
+          Submit Claim
+        </button>
+      )}
     </motion.div>
   );
 }
-

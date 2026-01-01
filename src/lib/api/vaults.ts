@@ -1,9 +1,9 @@
-import { Vault, VaultState } from "@/lib/types/vault";
+import { Vault, VaultPosition, VaultState } from "@/lib/types/vault";
 import { apiRequest } from "./client";
 import {
   mockVaults,
   mockVaultPositions,
-  getVaultById as getMockVaultById, // alias to avoid name collision
+  getVaultById as getMockVaultById,
 } from "@/lib/mocks/vaultData";
 
 export async function getVaults(): Promise<Vault[]> {
@@ -14,32 +14,39 @@ export async function getVaultById(id: string): Promise<Vault | null> {
   return apiRequest<Vault | null>(
     `/vaults/${id}`,
     { method: "GET" },
-    () => getMockVaultById(id) ?? null // convert undefined -> null
+    () => getMockVaultById(id) ?? null
   );
 }
 
+// Not used in your current UI, but kept correct + compile-safe
 export async function getVaultState(vaultId: string): Promise<VaultState> {
   return apiRequest<VaultState>(
     `/vaults/${vaultId}/state`,
     { method: "GET" },
-    // don’t guess your VaultState shape; keep it compile-safe
-    () => ({ vaultId } as unknown as VaultState)
+    () => {
+      const v = getMockVaultById(vaultId);
+      const pos = mockVaultPositions.find((p) => p.vaultId === vaultId);
+      return {
+        balanceEth: pos?.balance ?? 0,
+        insured: pos?.insured ?? false,
+        tvlEth: v?.tvl ?? 0,
+        riskScore: v?.riskScore ?? 0,
+      };
+    }
   );
 }
 
-export async function getVaultPositions(vaultId: string) {
-  return apiRequest(
+export async function getVaultPositions(vaultId: string): Promise<VaultPosition[]> {
+  return apiRequest<VaultPosition[]>(
     `/vaults/${vaultId}/positions`,
     { method: "GET" },
-    () => mockVaultPositions.filter((p: any) => p.vaultId === vaultId)
+    () => mockVaultPositions.filter((p) => p.vaultId === vaultId)
   );
 }
 
-// --- Actions (UI expects these to exist) ---
-
 /**
- * Deposit into a vault.
- * Signature matches src/components/vaults/DepositPanel.tsx
+ * ✅ Required by: src/components/vaults/DepositPanel.tsx
+ * Signature must be: depositToVault(vaultId, amount, insured, userAddress)
  */
 export async function depositToVault(
   vaultId: string,
@@ -53,29 +60,37 @@ export async function depositToVault(
       method: "POST",
       body: JSON.stringify({ vaultId, amount, insured, userAddress }),
     },
-    () => ({
-      txHash: `0x${Math.random().toString(16).slice(2)}`,
-      positionId: `pos-${Date.now()}`,
-    })
-  );
-}
+    () => {
+      // --- Update mocks so UI reflects actions during the demo ---
+      const vault = mockVaults.find((v) => v.id === vaultId);
+      if (vault) {
+        vault.tvl = Number((vault.tvl + amount).toFixed(4));
+      }
 
-/**
- * Optional: Withdraw (not currently imported by your UI, but useful later)
- */
-export async function withdrawFromVault(
-  vaultId: string,
-  amount: number,
-  userAddress: string
-): Promise<{ txHash: string }> {
-  return apiRequest<{ txHash: string }>(
-    `/vaults/${vaultId}/withdraw`,
-    {
-      method: "POST",
-      body: JSON.stringify({ vaultId, amount, userAddress }),
-    },
-    () => ({
-      txHash: `0x${Math.random().toString(16).slice(2)}`,
-    })
+      const apy = insured
+        ? (vault?.apyInsured ?? 0)
+        : (vault?.apyUninsured ?? 0);
+
+      const existing = mockVaultPositions.find((p) => p.vaultId === vaultId);
+      if (existing) {
+        existing.balance = Number((existing.balance + amount).toFixed(4));
+        existing.insured = insured;
+        existing.apy = apy;
+      } else {
+        mockVaultPositions.unshift({
+          vaultId,
+          balance: amount,
+          insured,
+          apy,
+          earned: 0,
+          depositTimestamp: Math.floor(Date.now() / 1000),
+        });
+      }
+
+      return {
+        txHash: `0x${Math.random().toString(16).slice(2)}`,
+        positionId: `pos-${Date.now()}`,
+      };
+    }
   );
 }

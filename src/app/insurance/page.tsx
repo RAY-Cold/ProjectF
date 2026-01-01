@@ -16,11 +16,28 @@ import { Shield, FileText } from 'lucide-react';
 
 export default function InsurancePage() {
   const { address } = useAccount();
+
   const [policies, setPolicies] = useState<CoveragePolicy[]>([]);
   const [claims, setClaims] = useState<Claim[]>([]);
   const [loading, setLoading] = useState(true);
+
   const [selectedClaim, setSelectedClaim] = useState<Claim | null>(null);
+
   const [showPurchaseModal, setShowPurchaseModal] = useState(false);
+
+  // ✅ For claim submission
+  const [showClaimModal, setShowClaimModal] = useState(false);
+  const [claimPolicy, setClaimPolicy] = useState<CoveragePolicy | null>(null);
+
+  const reload = async () => {
+    if (!address) return;
+    const [policiesData, claimsData] = await Promise.all([
+      getUserPolicies(address),
+      getUserClaims(address),
+    ]);
+    setPolicies(policiesData);
+    setClaims(claimsData);
+  };
 
   useEffect(() => {
     async function loadData() {
@@ -31,12 +48,7 @@ export default function InsurancePage() {
 
       setLoading(true);
       try {
-        const [policiesData, claimsData] = await Promise.all([
-          getUserPolicies(address),
-          getUserClaims(address),
-        ]);
-        setPolicies(policiesData);
-        setClaims(claimsData);
+        await reload();
       } catch (error) {
         console.error('Failed to load insurance data:', error);
       } finally {
@@ -44,6 +56,7 @@ export default function InsurancePage() {
       }
     }
     loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [address]);
 
   if (loading) {
@@ -82,8 +95,16 @@ export default function InsurancePage() {
         <TabsContent value="policies">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {policies.map((policy) => (
-              <CoverageCard key={policy.id} policy={policy} />
+              <CoverageCard
+                key={policy.id}
+                policy={policy}
+                onSubmitClaim={(p) => {
+                  setClaimPolicy(p);
+                  setShowClaimModal(true);
+                }}
+              />
             ))}
+
             {policies.length === 0 && (
               <div className="col-span-2 p-12 text-center text-muted-foreground">
                 No active policies. Purchase coverage to get started.
@@ -110,6 +131,7 @@ export default function InsurancePage() {
         </TabsContent>
       </Tabs>
 
+      {/* Purchase Coverage */}
       <Modal
         isOpen={showPurchaseModal}
         onClose={() => setShowPurchaseModal(false)}
@@ -121,14 +143,34 @@ export default function InsurancePage() {
           positionType="vault"
           maxCoverage={1000}
           riskScore={35}
-          onSuccess={() => {
+          onSuccess={async () => {
             setShowPurchaseModal(false);
-            // Reload policies
-            if (address) {
-              getUserPolicies(address).then(setPolicies);
-            }
+            await reload();
           }}
         />
+      </Modal>
+
+      {/* Submit Claim */}
+      <Modal
+        isOpen={showClaimModal}
+        onClose={() => setShowClaimModal(false)}
+        title="Submit Claim"
+        size="lg"
+      >
+        {claimPolicy ? (
+          <ClaimSubmissionForm
+            policyId={claimPolicy.id}
+            maxClaimAmount={claimPolicy.coverageAmount}
+            onSuccess={async () => {
+              setShowClaimModal(false);
+              await reload(); // ✅ refresh claims list
+            }}
+          />
+        ) : (
+          <div className="p-6 text-center text-muted-foreground">
+            No policy selected.
+          </div>
+        )}
       </Modal>
     </div>
   );
