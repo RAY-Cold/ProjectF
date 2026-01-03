@@ -158,7 +158,15 @@ export function CoveragePurchaseFlow({
           </div>
           <div className="flex items-center justify-between">
             <span className="text-sm text-muted-foreground">Risk Multiplier</span>
-            <span className="font-semibold">{estimate.multiplier.toFixed(2)}x</span>
+            <span className="font-semibold">
+  {Number(
+    (estimate as any)?.multiplier ??
+      (estimate as any)?.riskMultiplier ??
+      1
+  ).toFixed(2)}
+  x
+</span>
+
           </div>
           <div className="pt-3 border-t border-border">
             <div className="flex items-center justify-between">
