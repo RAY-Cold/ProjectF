@@ -23,18 +23,26 @@ function sleep(ms: number) {
 async function safeParseJson(res: Response): Promise<any> {
   const text = await res.text();
   if (!text) return null;
+
   try {
     return JSON.parse(text);
   } catch {
+    // If backend ever returns non-JSON (proxy, HTML error page, etc.)
     return { ok: false, error: "Invalid JSON response", details: text };
   }
 }
 
-async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> {
+function joinUrl(base: string, endpoint: string) {
   // If endpoint is absolute, don't prefix
-  const url = endpoint.startsWith("http")
-    ? endpoint
-    : `${API_BASE_URL}${endpoint}`;
+  if (endpoint.startsWith("http://") || endpoint.startsWith("https://")) return endpoint;
+
+  const b = base.endsWith("/") ? base.slice(0, -1) : base;
+  const e = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
+  return `${b}${e}`;
+}
+
+async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  const url = joinUrl(API_BASE_URL, endpoint);
 
   const response = await fetch(url, {
     ...options,
@@ -42,21 +50,20 @@ async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> 
       "Content-Type": "application/json",
       ...(options?.headers ?? {}),
     },
-    // In Next.js, this avoids caching for API routes
+    // Avoid caching for API routes in Next.js
     cache: "no-store",
   });
 
   const parsed = (await safeParseJson(response)) as ApiEnvelope<T> | T | null;
 
-  // If backend uses { ok, data } envelope, unwrap it.
   const isEnvelope =
     parsed &&
     typeof parsed === "object" &&
     "ok" in (parsed as any) &&
     typeof (parsed as any).ok === "boolean";
 
+  // Non-2xx
   if (!response.ok) {
-    // Try to read error message from envelope first, else fallback
     const msg = isEnvelope
       ? (parsed as any)?.error || response.statusText
       : response.statusText;
@@ -66,14 +73,14 @@ async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> 
     throw new ApiError(response.status, `API error: ${msg}`, details);
   }
 
-  // If response.ok but envelope says ok:false (some APIs do this)
+  // 2xx but ok:false envelope (some APIs do this)
   if (isEnvelope && (parsed as any).ok === false) {
     const msg = (parsed as any)?.error || "Request failed";
     const details = (parsed as any)?.details;
     throw new ApiError(response.status, `API error: ${msg}`, details);
   }
 
-  // Successful: return unwrapped data if envelope, else raw parsed
+  // Success: unwrap envelope if present
   return (isEnvelope ? (parsed as any).data : parsed) as T;
 }
 

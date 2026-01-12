@@ -1,0 +1,196 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+enum ActivityType {
+  deposit
+  withdraw
+  coverage_purchased
+  claim_submitted
+  claim_approved
+  claim_rejected
+  payout_received
+  supply
+  borrow
+  repay
+  liquidation
+  vote
+  proposal_created
+}
+
+enum ClaimStatus {
+  submitted
+  voting
+  approved
+  rejected
+  paid
+}
+
+enum ProposalStatus {
+  active
+  passed
+  failed
+  executed
+}
+
+model User {
+  id        String   @id @default(cuid())
+  address   String   @unique
+  createdAt DateTime @default(now())
+
+  positions  LendingPosition[]
+  votes      Vote[]
+  claimVotes ClaimVote[] // ✅ opposite relation for ClaimVote.user
+  activities Activity[]
+  policies   Policy[]
+}
+
+model Vault {
+  id         String   @id @default(cuid())
+  symbol     String
+  name       String
+  chain      String
+  tvlUsd     Float    @default(0)
+  apyBase    Float    @default(0)
+  apyRiskAdj Float    @default(0)
+  riskScore  Int      @default(50)
+  updatedAt  DateTime @updatedAt
+
+  activities Activity[]
+}
+
+model LendingMarket {
+  id             String @id @default(cuid())
+  assetSymbol    String
+  assetName      String
+  totalSupplyUsd Float  @default(0)
+  totalBorrowUsd Float  @default(0)
+
+  reserveFactor   Float @default(0.1) // 10%
+  kinkUtilization Float @default(0.8) // 80%
+  baseRate        Float @default(0.02) // 2%
+  slope1          Float @default(0.08) // 8%
+  slope2          Float @default(0.6) // 60%
+  riskPremiumMax  Float @default(0.15) // +15% at max risk
+
+  updatedAt DateTime @updatedAt
+
+  positions     LendingPosition[]
+  riskSnapshots RiskSnapshot[]
+}
+
+model LendingPosition {
+  id           String   @id @default(cuid())
+  userId       String
+  marketId     String
+  suppliedUsd  Float    @default(0)
+  borrowedUsd  Float    @default(0)
+  healthFactor Float    @default(2.0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user   User          @relation(fields: [userId], references: [id])
+  market LendingMarket @relation(fields: [marketId], references: [id])
+
+  @@unique([userId, marketId])
+}
+
+model Policy {
+  id          String   @id @default(cuid())
+  userId      String
+  vaultId     String
+  coverageUsd Float
+  premiumUsd  Float
+  startAt     DateTime @default(now())
+  endAt       DateTime
+  active      Boolean  @default(true)
+
+  user   User    @relation(fields: [userId], references: [id])
+  claims Claim[]
+}
+
+model Claim {
+  id          String      @id @default(cuid())
+  policyId    String
+  vaultId     String
+  amountUsd   Float
+  reason      String
+  evidenceUrl String?
+  status      ClaimStatus @default(submitted)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  policy Policy      @relation(fields: [policyId], references: [id])
+  votes  ClaimVote[]
+}
+
+model ClaimVote {
+  id        String   @id @default(cuid())
+  claimId   String
+  userId    String
+  support   Boolean
+  weight    Float    @default(1)
+  createdAt DateTime @default(now())
+
+  claim Claim @relation(fields: [claimId], references: [id])
+  user  User  @relation(fields: [userId], references: [id])
+
+  @@unique([claimId, userId])
+}
+
+model Proposal {
+  id          String         @id @default(cuid())
+  title       String
+  description String
+  type        String // "PARAM_CHANGE" | "RISK_OVERRIDE" | etc.
+  payloadJson String
+  status      ProposalStatus @default(active)
+  startsAt    DateTime       @default(now())
+  endsAt      DateTime
+  createdAt   DateTime       @default(now())
+
+  votes Vote[]
+}
+
+model Vote {
+  id         String   @id @default(cuid())
+  proposalId String
+  userId     String
+  support    Boolean
+  weight     Float    @default(1)
+  createdAt  DateTime @default(now())
+
+  proposal Proposal @relation(fields: [proposalId], references: [id])
+  user     User     @relation(fields: [userId], references: [id])
+
+  @@unique([proposalId, userId])
+}
+
+model RiskSnapshot {
+  id          String   @id @default(cuid())
+  marketId    String
+  riskScore   Int
+  factorsJson String
+  createdAt   DateTime @default(now())
+
+  market LendingMarket @relation(fields: [marketId], references: [id])
+}
+
+model Activity {
+  id        String       @id @default(cuid())
+  type      ActivityType
+  userId    String?
+  vaultId   String?
+  amountUsd Float?
+  metaJson  String?
+  createdAt DateTime     @default(now())
+
+  user  User?  @relation(fields: [userId], references: [id])
+  vault Vault? @relation(fields: [vaultId], references: [id])
+}

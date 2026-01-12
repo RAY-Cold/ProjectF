@@ -9,130 +9,119 @@ import {
   getClaimById as getMockClaimById,
 } from "@/lib/mocks/insuranceData";
 
-/**
- * Backend endpoints we use (Next.js API routes):
- *  - GET   /api/insurance/policies/:userAddress
- *  - POST  /api/insurance/quote
- *  - POST  /api/insurance/purchase
- *  - GET   /api/insurance/claims/user/:userAddress
- *  - GET   /api/insurance/claims/:claimId
- *  - POST  /api/insurance/claims/submit
- *
- * NOTE:
- * Your UI currently calls these functions. We keep signatures stable.
- * If backend fails, we fall back to mocks (your existing behavior).
- */
-
-/** ---------------------------
- * Helpers to map backend -> UI types
- * -------------------------- */
+function shortTx(): string {
+  return `0x${Math.random().toString(16).slice(2)}${Math.random()
+    .toString(16)
+    .slice(2)}`.slice(0, 66);
+}
 
 function toUnixSeconds(iso: string): number {
   const ms = Date.parse(iso);
   return Number.isFinite(ms) ? Math.floor(ms / 1000) : Math.floor(Date.now() / 1000);
 }
 
-function shortTx(): string {
-  return `0x${Math.random().toString(16).slice(2)}${Math.random().toString(16).slice(2)}`.slice(0, 66);
-}
-
-/**
- * Map backend Policy (server/store.ts) -> CoveragePolicy (UI)
- * Your UI type expects:
- *  id, policyType, positionId, coverageAmount, premium, premiumRate, duration,
- *  startDate, endDate, riskScore, active, nftTokenId
- */
+// Backend Policy -> UI CoveragePolicy
 function mapPolicyToCoveragePolicy(p: any): CoveragePolicy {
-  const start = toUnixSeconds(p.startAt ?? p.createdAt ?? new Date().toISOString());
-  const end = toUnixSeconds(p.endAt ?? new Date(Date.now() + 90 * 86400 * 1000).toISOString());
+  // If it's already UI-shaped, return as-is
+  if (p && typeof p === "object" && "coverageAmount" in p && "premiumRate" in p) {
+    return p as CoveragePolicy;
+  }
+
+  const startIso = p.startAt ?? p.createdAt ?? new Date().toISOString();
+  const endIso = p.endAt ?? new Date(Date.now() + 90 * 86400 * 1000).toISOString();
+
+  const startDate = toUnixSeconds(startIso);
+  const endDate = toUnixSeconds(endIso);
 
   const durationDays =
-    typeof p?.endAt === "string" && typeof p?.startAt === "string"
-      ? Math.max(1, Math.round((Date.parse(p.endAt) - Date.parse(p.startAt)) / (1000 * 60 * 60 * 24)))
-      : Number(p.durationDays ?? p.duration ?? 90);
+    Number.isFinite(Date.parse(endIso)) && Number.isFinite(Date.parse(startIso))
+      ? Math.max(1, Math.round((Date.parse(endIso) - Date.parse(startIso)) / 86400000))
+      : 90;
 
-  // Estimate a "premiumRate" for UI if backend doesn't provide it
-  const premium = Number(p.premiumPaidUSD ?? p.premium ?? 0);
-  const coverage = Number(p.coverageAmountUSD ?? p.coverageAmount ?? 0);
+  const coverageAmount = Number(p.coverageUsd ?? p.coverageAmountUSD ?? p.coverageAmount ?? 0);
+  const premium = Number(p.premiumUsd ?? p.premiumPaidUSD ?? p.premium ?? 0);
+
   const premiumRate =
-    coverage > 0 && durationDays > 0 ? Number(((premium / coverage) * (365 / durationDays)).toFixed(4)) : 0;
+    coverageAmount > 0 && durationDays > 0
+      ? Number(((premium / coverageAmount) * (365 / durationDays)).toFixed(4))
+      : 0;
 
   return {
     id: String(p.id),
-    policyType: (p.coverageType ?? p.policyType ?? "vault") as any,
-    positionId: String(p.targetId ?? p.positionId ?? "unknown"),
-    coverageAmount: Number(p.coverageAmountUSD ?? p.coverageAmount ?? 0),
+    policyType: "vault" as any,
+    // Your UI uses positionId; backend has vaultId as target
+    positionId: String(p.vaultId ?? p.targetId ?? "unknown"),
+    coverageAmount,
     premium,
     premiumRate,
     duration: durationDays,
-    startDate: start,
-    endDate: end,
+    startDate,
+    endDate,
     riskScore: Number(p.riskScore ?? 35),
-    active: (p.status ? p.status === "active" : Boolean(p.active ?? true)) as boolean,
+    active: Boolean(p.active ?? true),
     nftTokenId:
       p.nftTokenId ??
-      `0x${Math.random().toString(16).slice(2, 10)}...${Math.random().toString(16).slice(2, 6)}`,
-  };
+      `0x${Math.random().toString(16).slice(2, 10)}...${Math.random()
+        .toString(16)
+        .slice(2, 6)}`,
+  } as any;
 }
 
-/**
- * Map backend Claim (server/store.ts) -> Claim (UI)
- * Your UI claim expects fields like:
- *  id, policyId, status, lossAmount, claimedAmount, evidence, description,
- *  submittedAt, votesFor, votesAgainst, requiredQuorum, votingEndsAt, stakeRequired, staked
- */
+// Backend Claim -> UI Claim
 function mapBackendClaimToUIClaim(c: any): Claim {
-  const submittedAt = toUnixSeconds(c.submittedAt ?? new Date().toISOString());
-  const votingEndsAt = toUnixSeconds(c.votingEndsAt ?? new Date(Date.now() + 3 * 86400 * 1000).toISOString());
+  // If already UI-shaped (mocks), return as-is
+  if (c && typeof c === "object" && "lossAmount" in c && "claimedAmount" in c) {
+    return c as Claim;
+  }
 
-  const lossAmount = Number(c.claimedAmountUSD ?? c.lossAmount ?? 0);
-  const claimedAmount = Number(c.claimedAmountUSD ?? c.claimedAmount ?? lossAmount);
+  const submittedAt = toUnixSeconds(c.createdAt ?? new Date().toISOString());
+  const votingEndsAt = toUnixSeconds(
+    c.votingEndsAt ?? new Date(Date.now() + 3 * 86400 * 1000).toISOString()
+  );
+
+  const claimedAmount = Number(c.amountUsd ?? c.claimedAmountUSD ?? 0);
+
+  // Backend does not store votesFor/votesAgainst directly; it stores votes list.
+  const votes = Array.isArray(c.votes) ? c.votes : [];
+  const votesFor = votes.filter((v: any) => v.support).length;
+  const votesAgainst = votes.filter((v: any) => !v.support).length;
 
   return {
     id: String(c.id),
     policyId: String(c.policyId),
-    status: (c.status ?? "voting") as any,
-    lossAmount,
+    status: String(c.status ?? "voting") as any,
+    lossAmount: claimedAmount,
     claimedAmount,
-    evidence: Array.isArray(c.evidence)
-      ? c.evidence
-      : c.evidence
-      ? [
-          c.evidence.txHash ? `tx:${c.evidence.txHash}` : "",
-          c.evidence.url ? `url:${c.evidence.url}` : "",
-        ].filter(Boolean)
-      : [],
-    description: c.description ?? c.evidence?.description ?? "",
+    evidence: [
+      c.evidenceUrl ? `url:${c.evidenceUrl}` : "",
+    ].filter(Boolean),
+    description: String(c.reason ?? ""),
     submittedAt,
-    votesFor: Number(c.votesFor ?? 0),
-    votesAgainst: Number(c.votesAgainst ?? 0),
-    requiredQuorum: Number(c.requiredQuorum ?? 2000),
+    votesFor,
+    votesAgainst,
+    requiredQuorum: Number(c.requiredQuorum ?? 3), // using count-based quorum in backend vote route
     votingEndsAt,
     stakeRequired: Number(c.stakeRequired ?? 0.2),
     staked: Number(c.staked ?? 0.2),
-  };
-}
-
-/** ---------------------------
- * Public API used by UI
- * -------------------------- */
-
-export async function getUserPolicies(userAddress: string): Promise<CoveragePolicy[]> {
-  return apiRequest<any[]>(
-    `/insurance/policies/${encodeURIComponent(userAddress)}`,
-    { method: "GET" },
-    () => mockPolicies
-  ).then((rows) => rows.map(mapPolicyToCoveragePolicy));
+  } as any;
 }
 
 /**
- * UI expects getCoverageEstimateApi(positionId, coverageAmount, riskScore, duration?)
- *
- * Backend expects:
- *  POST /insurance/quote
- *  {
- *    userAddress, coverageType, targetId, coverageAmountUSD, durationDays, riskScore
- *  }
+ * Backend route: GET /api/insurance/policies?address=0x...
+ */
+export async function getUserPolicies(userAddress: string): Promise<CoveragePolicy[]> {
+  const rows = await apiRequest<any[]>(
+    `/insurance/policies?address=${encodeURIComponent(userAddress)}`,
+    { method: "GET" },
+    () => mockPolicies as any
+  );
+
+  return rows.map(mapPolicyToCoveragePolicy);
+}
+
+/**
+ * You don't have a quote endpoint in the backend yet.
+ * For now, keep the existing estimator (excellent for demo).
  */
 export async function getCoverageEstimateApi(
   positionId: string,
@@ -140,53 +129,19 @@ export async function getCoverageEstimateApi(
   riskScore: number,
   duration: number = 90
 ): Promise<CoverageEstimate> {
-  return apiRequest<any>(
+  return apiRequest<CoverageEstimate>(
     "/insurance/quote",
-    {
-      method: "POST",
-      body: JSON.stringify({
-        userAddress: "0xDEMO", // UI doesn't pass user here; safe placeholder
-        coverageType: "vault",
-        targetId: positionId,
-        coverageAmountUSD: coverageAmount,
-        durationDays: duration,
-        riskScore,
-      }),
-    },
+    { method: "POST", body: JSON.stringify({ positionId, coverageAmount, riskScore, duration }) },
     () => getCoverageEstimate(coverageAmount, riskScore, duration)
-  ).then((q) => {
-    // Your mock getCoverageEstimate returns a CoverageEstimate already
-    // Backend quote returns: premiumUSD, deductibleBps, activationDelaySec, utilizationBps, multipliers...
-    // We map to CoverageEstimate shape used in UI (premium, premiumRate, etc.)
-    if ("premium" in q) return q as CoverageEstimate;
-
-    const premium = Number(q.premiumUSD ?? 0);
-    const premiumRate =
-      coverageAmount > 0 && duration > 0 ? Number(((premium / coverageAmount) * (365 / duration)).toFixed(4)) : 0;
-
-    const est: CoverageEstimate = {
-      premium,
-      premiumRate,
-      riskScore,
-      coverageAmount,
-      duration,
-      deductible: Number(q.deductibleBps ?? 1000) / 100, // UI often shows %; 1000bps => 10
-      activationDelay: Number(q.activationDelaySec ?? 900),
-      utilization: Number(q.utilizationBps ?? 0) / 100, // bps->%
-    } as any;
-
-    return est;
-  });
+  );
 }
 
 /**
- * UI expects purchaseCoverage(positionId, coverageAmount, duration, userAddress)
+ * Backend route: POST /api/insurance/policies
+ * { address, vaultId, coverageUsd, durationDays }
  *
- * Backend expects:
- *  POST /insurance/purchase
- *  { userAddress, coverageType, targetId, coverageAmountUSD, durationDays, riskScore? }
- *
- * We return { policyId, txHash } as UI expects
+ * Your UI calls: purchaseCoverage(positionId, coverageAmount, duration, userAddress)
+ * Here positionId == vaultId in our new backend model.
  */
 export async function purchaseCoverage(
   positionId: string,
@@ -194,24 +149,21 @@ export async function purchaseCoverage(
   duration: number,
   userAddress: string
 ): Promise<{ policyId: string; txHash: string }> {
-  return apiRequest<any>(
-    "/insurance/purchase",
+  const resp = await apiRequest<any>(
+    "/insurance/policies",
     {
       method: "POST",
       body: JSON.stringify({
-        userAddress,
-        coverageType: "vault",
-        targetId: positionId,
-        coverageAmountUSD: coverageAmount,
+        address: userAddress,
+        vaultId: positionId,
+        coverageUsd: coverageAmount,
         durationDays: duration,
-        riskScore: 35,
       }),
     },
     () => {
       const policyId = `policy-${Date.now()}`;
       const now = Math.floor(Date.now() / 1000);
       const end = now + duration * 86400;
-
       const est = getCoverageEstimate(coverageAmount, 35, duration);
 
       mockPolicies.unshift({
@@ -231,54 +183,62 @@ export async function purchaseCoverage(
           .slice(2, 6)}`,
       });
 
-      return { policyId, txHash: shortTx() };
+      return { id: policyId };
     }
-  ).then((resp) => {
-    // Backend returns { policy, quote } or similar
-    if (resp?.policy?.id) return { policyId: String(resp.policy.id), txHash: shortTx() };
-    if (resp?.policyId) return { policyId: String(resp.policyId), txHash: resp.txHash ?? shortTx() };
-    // Fallback
-    return { policyId: `policy-${Date.now()}`, txHash: shortTx() };
-  });
+  );
+
+  // resp is policy object from backend
+  const policyId = String(resp?.id ?? resp?.policyId ?? `policy-${Date.now()}`);
+  return { policyId, txHash: shortTx() };
 }
 
 /**
- * UI expects getUserClaims(userAddress) -> Claim[]
+ * Backend route: GET /api/insurance/claims
+ * (returns all claims; we filter client-side by user’s policies)
  *
- * Backend route: GET /insurance/claims/user/:userAddress
+ * If you want a server-filter endpoint later, add it — but this works now.
  */
 export async function getUserClaims(userAddress: string): Promise<Claim[]> {
-  return apiRequest<any[]>(
-    `/insurance/claims/user/${encodeURIComponent(userAddress)}`,
+  // First get policies for this user
+  const policies = await getUserPolicies(userAddress);
+  const myPolicyIds = new Set(policies.map((p) => p.id));
+
+  const rows = await apiRequest<any[]>(
+    "/insurance/claims",
     { method: "GET" },
-    () => getClaimsByUser(userAddress)
-  ).then((rows) => rows.map(mapBackendClaimToUIClaim));
+    () => getClaimsByUser(userAddress) as any
+  );
+
+  const mapped = rows.map(mapBackendClaimToUIClaim);
+  // Filter to claims whose policyId is owned by user
+  return mapped.filter((c) => myPolicyIds.has(String(c.policyId)));
 }
 
 /**
- * UI expects getClaimById(id) -> Claim | null
- *
- * Backend route: GET /insurance/claims/:claimId
+ * Backend currently has GET /api/insurance/claims (list), no /claims/:id.
+ * So we list + find.
  */
 export async function getClaimById(id: string): Promise<Claim | null> {
-  return apiRequest<any>(
-    `/insurance/claims/${encodeURIComponent(id)}`,
+  const rows = await apiRequest<any[]>(
+    "/insurance/claims",
     { method: "GET" },
-    () => getMockClaimById(id) ?? null
-  ).then((row) => {
-    if (!row) return null;
-    // mock returns already shaped Claim
-    if ("lossAmount" in row) return row as Claim;
-    return mapBackendClaimToUIClaim(row);
-  });
+    () => mockClaims as any
+  );
+
+  const found = rows.find((c) => String(c.id) === String(id));
+  if (found) return mapBackendClaimToUIClaim(found);
+
+  // fallback to mock getter
+  return getMockClaimById(id) ?? null;
 }
 
 /**
- * ✅ Required by: ClaimSubmissionForm.tsx
- * submitClaim(policyId, lossAmount, description, evidence, userAddress)
+ * UI expects: submitClaim(policyId, lossAmount, description, evidence, userAddress)
  *
- * Backend route: POST /insurance/claims/submit
- * Body: { userAddress, policyId, incidentType, targetId, incidentAt, claimedAmountUSD, evidence }
+ * Backend route: POST /api/insurance/claims
+ * { address, policyId, vaultId, amountUsd, reason, evidenceUrl? }
+ *
+ * We don't store evidence[] in DB yet; we store one URL. We pick the first http link.
  */
 export async function submitClaim(
   policyId: string,
@@ -287,23 +247,24 @@ export async function submitClaim(
   evidence: string[],
   userAddress: string
 ): Promise<{ claimId: string; txHash: string }> {
-  return apiRequest<any>(
-    "/insurance/claims/submit",
+  // Find the policy so we can attach vaultId
+  const policies = await getUserPolicies(userAddress);
+  const policy = policies.find((p) => String(p.id) === String(policyId));
+
+  const vaultId = policy?.positionId ?? "unknown";
+  const evidenceUrl = evidence?.find((e) => typeof e === "string" && e.startsWith("http"));
+
+  const resp = await apiRequest<any>(
+    "/insurance/claims",
     {
       method: "POST",
       body: JSON.stringify({
-        userAddress,
+        address: userAddress,
         policyId,
-        incidentType: "vault",
-        targetId: "unknown",
-        incidentAt: new Date().toISOString(),
-        claimedAmountUSD: lossAmount,
-        evidence: {
-          description,
-          // Put the first evidence string into txHash if it looks like one
-          txHash: evidence?.find((e) => typeof e === "string" && e.startsWith("0x")) ?? undefined,
-          url: evidence?.find((e) => typeof e === "string" && e.startsWith("http")) ?? undefined,
-        },
+        vaultId,
+        amountUsd: lossAmount,
+        reason: description,
+        evidenceUrl,
       }),
     },
     () => {
@@ -327,12 +288,10 @@ export async function submitClaim(
         staked: 0.2,
       });
 
-      return { claimId, txHash: shortTx() };
+      return { id: claimId };
     }
-  ).then((resp) => {
-    // Backend returns { claim } or { claimId }
-    if (resp?.claim?.id) return { claimId: String(resp.claim.id), txHash: shortTx() };
-    if (resp?.claimId) return { claimId: String(resp.claimId), txHash: resp.txHash ?? shortTx() };
-    return { claimId: `claim-${Date.now()}`, txHash: shortTx() };
-  });
+  );
+
+  const claimId = String(resp?.id ?? resp?.claimId ?? `claim-${Date.now()}`);
+  return { claimId, txHash: shortTx() };
 }

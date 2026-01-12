@@ -8,23 +8,11 @@ import {
   mockVotes,
 } from "@/lib/mocks/governanceData";
 
-/**
- * Backend endpoints used (Next.js API routes):
- *  - GET  /api/dao/claims
- *  - GET  /api/dao/parameters
- *  - GET  /api/dao/stats
- *  - POST /api/dao/vote              (supports claim + parameter voting)
- *  - POST /api/dao/finalize-claim
- *  - POST /api/dao/payout
- *  - POST /api/dao/propose
- *  - POST /api/dao/finalize-parameter (action: finalize|execute)
- *  - POST /api/dao/fast-forward/:claimId
- *
- * Your UI types may differ slightly from backend shape, so we normalize.
- */
-
+// Helper: tiny tx hash for demo UI
 function shortTx(): string {
-  return `0x${Math.random().toString(16).slice(2)}${Math.random().toString(16).slice(2)}`.slice(0, 66);
+  return `0x${Math.random().toString(16).slice(2)}${Math.random()
+    .toString(16)
+    .slice(2)}`.slice(0, 66);
 }
 
 function toUnixSeconds(iso: string): number {
@@ -32,66 +20,75 @@ function toUnixSeconds(iso: string): number {
   return Number.isFinite(ms) ? Math.floor(ms / 1000) : Math.floor(Date.now() / 1000);
 }
 
-/** Normalize backend claim proposal -> UI ClaimProposal */
-function mapClaimProposal(row: any): ClaimProposal {
-  // Backend listClaimProposals() returns:
-  // { claimId, policyId, userAddress, status, claimedAmountUSD, votesFor, votesAgainst, votingEndsAt, incidentType, targetId, submittedAt }
-  // Your UI ClaimProposal likely expects: id, claimId, policyId, ... + quorum info etc.
-  return {
-    id: String(row.id ?? row.claimId),
-    claimId: String(row.claimId ?? row.id),
-    policyId: String(row.policyId ?? ""),
-    claimant: String(row.userAddress ?? row.claimant ?? ""),
-    status: String(row.status ?? "voting") as any,
-    amount: Number(row.claimedAmountUSD ?? row.amount ?? 0),
-    votesFor: Number(row.votesFor ?? 0),
-    votesAgainst: Number(row.votesAgainst ?? 0),
-    votingEndsAt: row.votingEndsAt ? toUnixSeconds(row.votingEndsAt) : toUnixSeconds(new Date(Date.now() + 3 * 86400e3).toISOString()),
-    // Optional fields some UIs use:
-    incidentType: row.incidentType ?? row.type ?? "vault",
-    targetId: row.targetId ?? row.positionId ?? "unknown",
-    submittedAt: row.submittedAt ? toUnixSeconds(row.submittedAt) : toUnixSeconds(new Date().toISOString()),
-    requiredQuorum: Number(row.requiredQuorum ?? 2000),
-  } as any;
-}
+/**
+ * CLAIM GOVERNANCE:
+ * Our backend adjudication is done via:
+ *  POST /api/insurance/claims/:id/vote
+ * and claims are listed at:
+ *  GET /api/insurance/claims
+ *
+ * So: ClaimProposal list is derived from insurance claims.
+ */
+function mapClaimToClaimProposal(c: any): ClaimProposal {
+  const votes = Array.isArray(c.votes) ? c.votes : [];
+  const votesFor = votes.filter((v: any) => v.support).length;
+  const votesAgainst = votes.filter((v: any) => !v.support).length;
 
-/** Normalize backend parameter proposal -> UI ParameterProposal */
-function mapParameterProposal(row: any): ParameterProposal {
-  // Backend returns ParameterProposal { id,title,description,proposedBy,createdAt,changes,votingStartsAt,votingEndsAt,votesFor,votesAgainst,status,executedAt? }
   return {
-    id: String(row.id),
-    title: String(row.title ?? "Parameter Proposal"),
-    description: String(row.description ?? ""),
-    proposer: String(row.proposedBy ?? row.proposer ?? ""),
-    createdAt: row.createdAt ? toUnixSeconds(row.createdAt) : toUnixSeconds(new Date().toISOString()),
-    changes: row.changes ?? {},
-    votesFor: Number(row.votesFor ?? 0),
-    votesAgainst: Number(row.votesAgainst ?? 0),
-    votingEndsAt: row.votingEndsAt ? toUnixSeconds(row.votingEndsAt) : toUnixSeconds(new Date(Date.now() + 3 * 86400e3).toISOString()),
-    status: String(row.status ?? "voting") as any,
-    executedAt: row.executedAt ? toUnixSeconds(row.executedAt) : undefined,
-  } as any;
-}
-
-/** Normalize backend dao stats -> UI DAOStats */
-function mapDAOStats(row: any): DAOStats {
-  // Backend getDAOStats returns:
-  // { poolBalanceUSD, reservedUSD, utilizationBps, totalPremiumsUSD, totalPaidOutUSD, totalClaimsUSD, params }
-  return {
-    poolBalance: Number(row.poolBalanceUSD ?? row.poolBalance ?? 0),
-    reserved: Number(row.reservedUSD ?? row.reserved ?? 0),
-    utilization: Number(row.utilizationBps ?? 0) / 100, // bps -> %
-    totalPremiums: Number(row.totalPremiumsUSD ?? 0),
-    totalPaidOut: Number(row.totalPaidOutUSD ?? 0),
-    totalClaims: Number(row.totalClaimsUSD ?? 0),
-    params: row.params ?? {},
+    id: String(c.id),
+    claimId: String(c.id),
+    policyId: String(c.policyId ?? ""),
+    claimant: String(c.claimant ?? c.userAddress ?? ""),
+    status: String(c.status ?? "voting") as any,
+    amount: Number(c.amountUsd ?? c.claimedAmountUSD ?? 0),
+    votesFor,
+    votesAgainst,
+    requiredQuorum: Number(c.requiredQuorum ?? 3),
+    votingEndsAt: c.votingEndsAt
+      ? toUnixSeconds(c.votingEndsAt)
+      : toUnixSeconds(new Date(Date.now() + 3 * 86400e3).toISOString()),
+    incidentType: "vault",
+    targetId: String(c.vaultId ?? "unknown"),
+    submittedAt: c.createdAt ? toUnixSeconds(c.createdAt) : toUnixSeconds(new Date().toISOString()),
   } as any;
 }
 
 /**
- * If your UI calls getClaimVotes(claimId), but backend doesn't expose a votes list endpoint yet,
- * we fall back to mock votes.
- * (You can add /api/dao/votes/[claimId] later if needed.)
+ * PARAMETER GOVERNANCE:
+ * Stored in Proposal model:
+ *  GET /api/governance/proposals
+ */
+function mapProposalToParameterProposal(p: any): ParameterProposal {
+  // payloadJson is stored as string in DB
+  let changes: any = {};
+  try {
+    changes = p.payloadJson ? JSON.parse(p.payloadJson) : {};
+  } catch {
+    changes = {};
+  }
+
+  return {
+    id: String(p.id),
+    title: String(p.title ?? "Parameter Proposal"),
+    description: String(p.description ?? ""),
+    proposer: String(p.proposedBy ?? p.proposer ?? "DAO"),
+    createdAt: p.createdAt ? toUnixSeconds(p.createdAt) : toUnixSeconds(new Date().toISOString()),
+    changes,
+    votesFor: Array.isArray(p.votes)
+      ? p.votes.filter((v: any) => v.support).reduce((a: number, v: any) => a + Number(v.weight ?? 1), 0)
+      : Number(p.votesFor ?? 0),
+    votesAgainst: Array.isArray(p.votes)
+      ? p.votes.filter((v: any) => !v.support).reduce((a: number, v: any) => a + Number(v.weight ?? 1), 0)
+      : Number(p.votesAgainst ?? 0),
+    votingEndsAt: p.endsAt ? toUnixSeconds(p.endsAt) : toUnixSeconds(new Date(Date.now() + 3 * 86400e3).toISOString()),
+    status: String(p.status ?? "active") as any,
+    executedAt: p.executedAt ? toUnixSeconds(p.executedAt) : undefined,
+  } as any;
+}
+
+/**
+ * If UI calls getClaimVotes(claimId), we don't have a dedicated endpoint.
+ * We fall back to mocks (or you can add an endpoint later).
  */
 export async function getClaimVotes(claimId: string): Promise<Vote[]> {
   return apiRequest<Vote[]>(
@@ -103,48 +100,54 @@ export async function getClaimVotes(claimId: string): Promise<Vote[]> {
 
 export async function getClaimProposals(): Promise<ClaimProposal[]> {
   const rows = await apiRequest<any[]>(
-    "/dao/claims",
+    "/insurance/claims",
     { method: "GET" },
     () => mockClaimProposals as any
   );
 
-  // If mocks already match UI types, keep them
-  if (rows?.length && "claimId" in (rows[0] as any) && "votesFor" in (rows[0] as any) && "status" in (rows[0] as any)) {
-    // Might still be backend shape; we map safely
-    return rows.map(mapClaimProposal);
+  // If it’s already in UI claim-proposal shape (mocks), return as is
+  if (rows?.length && "claimId" in (rows[0] as any) && "votesFor" in (rows[0] as any)) {
+    return rows as any;
   }
-  return (rows as any[]).map(mapClaimProposal);
+
+  return rows.map(mapClaimToClaimProposal);
 }
 
 export async function getParameterProposals(): Promise<ParameterProposal[]> {
-  // Your old code used '/dao/proposals' but our backend route is '/dao/parameters'
   const rows = await apiRequest<any[]>(
-    "/dao/parameters",
+    "/governance/proposals",
     { method: "GET" },
     () => mockParameterProposals as any
   );
 
-  // If mock shape is already UI-compatible, return as-is; otherwise map.
+  // If mocks already match
   if (rows?.length && "changes" in (rows[0] as any) && "votesFor" in (rows[0] as any)) {
-    return rows.map(mapParameterProposal);
+    return rows as any;
   }
-  return (rows as any[]).map(mapParameterProposal);
+
+  return rows.map(mapProposalToParameterProposal);
 }
 
+/**
+ * DAO stats: your new backend doesn't yet expose treasury stats.
+ * For now we keep mock stats (good for hackathon) but still try backend first.
+ * If you want, I can add /api/governance/stats later backed by DB + activity sums.
+ */
 export async function getDAOStats(): Promise<DAOStats> {
   const row = await apiRequest<any>(
-    "/dao/stats",
+    "/governance/stats",
     { method: "GET" },
     () => mockDAOStats as any
   );
-  // If mock already correct, map is harmless
-  return mapDAOStats(row);
+
+  // If backend not present, mock returns correct shape
+  return row as DAOStats;
 }
 
 /**
  * voteOnClaim(claimId, voteType, userAddress)
- * voteType: 'approve' | 'reject'
- * Backend expects: POST /dao/vote with { mode:'claim', claimId, voter, support }
+ * New backend: POST /api/insurance/claims/:id/vote
+ * { address, support, weight? }
  */
 export async function voteOnClaim(
   claimId: string,
@@ -152,13 +155,11 @@ export async function voteOnClaim(
   userAddress: string
 ): Promise<{ txHash: string }> {
   await apiRequest<any>(
-    "/dao/vote",
+    `/insurance/claims/${encodeURIComponent(claimId)}/vote`,
     {
       method: "POST",
       body: JSON.stringify({
-        mode: "claim",
-        claimId,
-        voter: userAddress,
+        address: userAddress,
         support: voteType === "approve",
         weight: 1,
       }),
@@ -170,47 +171,28 @@ export async function voteOnClaim(
 }
 
 /**
- * Optional helpers (useful if your Governance UI has these actions)
+ * Optional helpers - these endpoints aren't implemented in the new backend yet,
+ * so we keep them as no-ops with mock fallback to avoid breaking UI.
  */
-export async function finalizeClaimVote(claimId: string): Promise<void> {
-  await apiRequest<any>(
-    "/dao/finalize-claim",
-    { method: "POST", body: JSON.stringify({ claimId }) },
-    () => ({ ok: true })
-  );
+export async function finalizeClaimVote(_claimId: string): Promise<void> {
+  // With the new vote endpoint, adjudication happens automatically.
+  return;
 }
 
-export async function executePayout(claimId: string): Promise<void> {
-  await apiRequest<any>(
-    "/dao/payout",
-    { method: "POST", body: JSON.stringify({ claimId }) },
-    () => ({ ok: true })
-  );
+export async function executePayout(_claimId: string): Promise<void> {
+  // Payout happens automatically after approval in our backend vote route.
+  return;
 }
 
 /**
- * fastForwardClaim(claimId, newStatus)
- * Your existing UI sends { status: newStatus }
- * Backend expects { to } where to is one of: "endVoting"|"approved"|"rejected"|"paid"
+ * fastForwardClaim is demo-only. No backend endpoint yet; keep mock-only behavior.
  */
 export async function fastForwardClaim(claimId: string, newStatus: string): Promise<void> {
-  // map UI status -> backend "to"
-  const map: Record<string, "endVoting" | "approved" | "rejected" | "paid"> = {
-    voting: "endVoting",
-    endVoting: "endVoting",
-    approved: "approved",
-    rejected: "rejected",
-    paid: "paid",
-  };
-
-  const to = map[newStatus] ?? "endVoting";
-
+  // If you want this supported server-side, add a /api/sim/fast-forward endpoint.
+  // For now, keep it as a harmless call that uses mock fallback.
   await apiRequest<any>(
     `/dao/fast-forward/${encodeURIComponent(claimId)}`,
-    {
-      method: "POST",
-      body: JSON.stringify({ to, status: newStatus }),
-    },
+    { method: "POST", body: JSON.stringify({ status: newStatus }) },
     () => ({ ok: true })
   );
 }
