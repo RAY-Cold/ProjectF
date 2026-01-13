@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useMemo } from "react";
 import { WagmiProvider, createConfig, http } from "wagmi";
 import { mainnet, sepolia } from "wagmi/chains";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -9,18 +9,15 @@ import { injected } from "wagmi/connectors";
 const config = createConfig({
   chains: [mainnet, sepolia],
   transports: {
-    [mainnet.id]: http(),
-    [sepolia.id]: http(),
+    [mainnet.id]: http("https://cloudflare-eth.com"),
+    [sepolia.id]: http("https://rpc.sepolia.org"),
   },
-  connectors: [
-    injected({
-      shimDisconnect: true,
-    }),
-  ],
+  multiInjectedProviderDiscovery: true,
+  connectors: [injected({ shimDisconnect: true })], // ✅ MetaMask only
 });
 
 export function WalletProvider({ children }: { children: React.ReactNode }) {
-  const [queryClient] = useState(() => new QueryClient());
+  const queryClient = useMemo(() => new QueryClient(), []);
 
   return (
     <WagmiProvider config={config}>

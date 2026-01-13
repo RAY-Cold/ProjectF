@@ -1,71 +1,93 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useAccount, useConnect, useDisconnect } from "wagmi";
-import { Button } from "@/components/shared/Button";
+import { Wallet, LogOut } from "lucide-react";
+import { formatAddress } from "@/lib/utils/formatters";
+
+function useMounted() {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  return mounted;
+}
+
+function isRejected(err: any) {
+  const msg = String(err?.message || err?.shortMessage || "").toLowerCase();
+  const code = err?.code;
+  return (
+    code === 4001 ||
+    msg.includes("user rejected") ||
+    msg.includes("rejected") ||
+    msg.includes("cancelled") ||
+    msg.includes("canceled")
+  );
+}
 
 export function WalletButton() {
+  const mounted = useMounted();
   const { address, isConnected } = useAccount();
-  const { connectAsync, connectors, isPending, error, reset } = useConnect();
+  const { connectAsync, connectors, isPending } = useConnect();
   const { disconnect } = useDisconnect();
+  const [msg, setMsg] = useState<string | null>(null);
 
-  const [localError, setLocalError] = useState<string | null>(null);
+  const injectedConn = useMemo(
+    () => connectors.find((c) => c.id === "injected"),
+    [connectors]
+  );
 
-  const wc = connectors.find((c) => c.id === "walletConnect");
-  const injected = connectors.find((c) => c.id === "injected");
-  const mm = connectors.find((c) => c.id === "metaMask");
-
-  // Prefer injected in Chrome (MetaMask/Rabby), WalletConnect otherwise
-  const preferred = mm ?? injected ?? wc ?? connectors[0];
-
-  async function handleConnect() {
-    setLocalError(null);
-    reset();
-
-    // Clear any stuck WC session keys before attempting again
+  const connectMetaMask = async () => {
+    setMsg(null);
     try {
-      Object.keys(localStorage)
-        .filter((k) => k.startsWith("wc@2") || k.includes("walletconnect"))
-        .forEach((k) => localStorage.removeItem(k));
-    } catch {}
-
-    try {
-      await connectAsync({ connector: preferred });
+      if (!injectedConn?.ready) {
+        setMsg("MetaMask not detected. Enable MetaMask extension in Chrome (not Incognito).");
+        return;
+      }
+      await connectAsync({ connector: injectedConn });
     } catch (e: any) {
-      // Prevent Next.js red-screen
-      setLocalError(e?.shortMessage || e?.message || "Connection failed. Try again.");
+      if (isRejected(e)) return setMsg("Connection cancelled.");
+      console.error(e);
+      setMsg(e?.shortMessage || e?.message || "Wallet connection failed.");
     }
+  };
+
+  if (!mounted) {
+    return (
+      <button className="px-4 py-2 rounded-lg bg-primary text-primary-foreground opacity-80" disabled>
+        Connect Wallet
+      </button>
+    );
   }
 
-  if (!isConnected) {
+  if (isConnected && address) {
     return (
-      <div className="flex flex-col items-end gap-2">
-        <Button onClick={handleConnect} isLoading={isPending}>
-          {preferred?.id === "walletConnect" ? "Connect (WalletConnect)" : "Connect Wallet"}
-        </Button>
-
-        {(localError || error?.message) && (
-          <div className="text-xs text-red-400 max-w-[420px] text-right">
-            {localError || error?.message}
-            <div className="mt-1 text-[11px] text-muted-foreground">
-              If it says “subscribe/connection interrupted”, click Connect again (we cleared stale WC session).
-            </div>
-          </div>
-        )}
+      <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 px-4 py-2 bg-secondary rounded-lg">
+          <span className="w-2 h-2 rounded-full bg-green-500" />
+          <span className="text-sm font-medium">{formatAddress(address)}</span>
+        </div>
+        <button
+          onClick={() => disconnect()}
+          className="p-2 bg-secondary hover:bg-secondary/80 rounded-lg"
+          title="Disconnect"
+        >
+          <LogOut className="w-4 h-4" />
+        </button>
       </div>
     );
   }
 
   return (
-    <div className="flex items-center gap-2">
-      <div className="text-xs text-muted-foreground">
-        <span className="text-foreground">
-          {address?.slice(0, 6)}…{address?.slice(-4)}
-        </span>
-      </div>
-      <Button variant="secondary" onClick={() => disconnect()}>
-        Disconnect
-      </Button>
+    <div className="flex flex-col items-end gap-2">
+      <button
+        onClick={connectMetaMask}
+        disabled={isPending}
+        className="flex items-center gap-2 px-4 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-lg disabled:opacity-60"
+      >
+        <Wallet className="w-4 h-4" />
+        {isPending ? "Connecting..." : "Connect MetaMask"}
+      </button>
+
+      {msg && <div className="text-xs text-red-400 max-w-[360px] text-right">{msg}</div>}
     </div>
   );
 }
